@@ -1,60 +1,66 @@
-# 🎉 YouTube Video Downloader - COMPLETE!
-
-## ✅ Project Status: 100% COMPLETE & PRODUCTION READY
-
-Your YouTube video downloader is now fully implemented, tested, and ready to use!
-
----
-
-## 📦 What You Got
-
-### Backend ✅ (Fully Operational)
-- **Node.js/Express 5.2** server running on port 3000
-- **8 REST API endpoints** with comprehensive error handling
-- **All 5 features implemented:**
-  - ✅ Single video downloads with quality filtering
-  - ✅ Playlist downloads as ZIP files
-  - ✅ Real-time progress streaming (SSE)
-  - ✅ Download cancellation support
-  - ✅ Automatic disk cleanup (5GB quota)
-  - ✅ Multi-tier rate limiting
-- **All 6 bugs fixed** for stability
-- **Production-ready** with logging and error recovery
-
-### Frontend ✅ (Fully Functional)
-- **React 19 + Vite 7.2** modern web app
-- **6 complete pages:**
-  - 🏠 Home - Landing page with features
-  - 📹 Download - Single video downloader
-  - 📥 Downloads - Active download monitoring
-  - 🎵 Playlist - Playlist ZIP downloader
-  - ⚙️ Settings - User preferences
-  - ❓ Help - Comprehensive FAQ & docs
-- **5 custom React hooks** for API integration
-- **Real-time progress bars** via Server-Sent Events
-- **Mobile-responsive** with Tailwind CSS
-- **Professional UI** with Lucide icons
-
----
+# 🎉 YouTube Video Downloader 
 
 ## 🚀 Quick Start (30 seconds)
+
+### Prerequisites
+- Node.js 16+ installed
+- Two terminal windows open
 
 ### Terminal 1: Backend
 ```bash
 cd backend
+npm install  # Only needed first time
 npm run dev
 # Output: Server running on http://localhost:3000
 ```
 
 ### Terminal 2: Frontend
 ```bash
-cd "youtube video downloader"
+cd frontend
+npm install  # Only needed first time
 npm run dev
 # Output: Local: http://localhost:5173
 ```
 
 ### Browser
 Open **http://localhost:5173** and start downloading!
+
+---
+
+## 📖 How It Works
+
+### Download Flow (Browser-Based)
+1. **You enter YouTube URL** in the React app
+2. **Backend gets video info** using yt-dlp
+3. **You select quality/format** you want
+4. **Click "Start Download"** - browser starts receiving video stream
+5. **Real-time progress** shown in browser with MB/size info
+6. **Pause/Resume at any time** - full control in browser
+7. **Video automatically saved** to your Downloads folder (not on server)
+
+### Key Advantages
+✅ **Direct browser downloads** - Files go straight to your computer  
+✅ **Pause/Resume support** - Full control over download  
+✅ **Better speed** - No server-side storage bottleneck  
+✅ **No server disk usage** - Videos aren't stored on server  
+✅ **Immediate access** - Available in Downloads folder instantly
+
+### Where Are My Videos?
+Videos download directly to **your computer's Downloads folder**:
+- **Windows**: `C:\Users\YourName\Downloads\VideoTitle.mp4`
+- **Mac**: `~/Downloads/VideoTitle.mp4`
+- **Linux**: `~/Downloads/VideoTitle.mp4`
+
+They appear in your browser's normal downloads list and start immediately!
+
+### Rate Limiting & Download Limits
+The app includes built-in protections:
+- **General API**: 30 requests/hour per IP
+- **Downloads**: 50 downloads/hour per IP  
+- **Playlists**: 5 playlist downloads/day per IP
+- **Disk Quota**: 5GB maximum (automatic cleanup when full)
+
+**Why?** Prevents server abuse, protects YouTube terms of service compliance, ensures fair usage for all users, and prevents disk exhaustion.
 
 ---
 
@@ -85,11 +91,10 @@ Backend:
 ├─ Node.js (v16+)
 ├─ Express 5.2
 ├─ yt-dlp-wrap
-├─ node-cron 3.0
-├─ express-rate-limit 7.1
-├─ archiver 7.0
-└─ fs-extra 11.3
+└─ express-rate-limit 7.1
 ```
+
+**Note:** No server-side disk storage needed! Videos stream directly to browser.
 
 ---
 

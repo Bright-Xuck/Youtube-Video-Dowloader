@@ -1,18 +1,27 @@
 import { useState, useEffect } from 'react';
-import { Download, AlertCircle, Play, Loader } from 'lucide-react';
+import { Download, AlertCircle, Play, Loader, Pause, Play as PlayIcon } from 'lucide-react';
 import { api } from '../services/api';
-import { useVideoInfo, useFormats, useProgressStream } from '../hooks/useApi';
+import { useVideoInfo, useFormats, useBrowserDownload } from '../hooks/useApi';
 
 export function DownloadPage() {
   const [url, setUrl] = useState('');
   const [selectedFormat, setSelectedFormat] = useState('best');
-  const [jobId, setJobId] = useState(null);
-  const [downloading, setDownloading] = useState(false);
   const [localError, setLocalError] = useState(null);
 
   const { info, loading: infoLoading, error: infoError, fetch: fetchInfo } = useVideoInfo();
   const { formats, loading: formatsLoading, error: formatsError, fetch: fetchFormats } = useFormats();
-  const { progress, done, error: progressError, raw } = useProgressStream(jobId);
+  const { 
+    progress, 
+    downloading, 
+    paused, 
+    error: downloadError,
+    downloadedSize,
+    totalSize,
+    startDownload, 
+    pauseDownload, 
+    resumeDownload, 
+    cancelDownload 
+  } = useBrowserDownload();
 
   const handleFetchInfo = async (e) => {
     e.preventDefault();
@@ -31,26 +40,14 @@ export function DownloadPage() {
     setLocalError(null);
     
     try {
-      setDownloading(true);
-      const response = await api.startDownload(url, selectedFormat, false);
-      setJobId(response.data.jobId);
-      setDownloading(false);
+      await startDownload(url, selectedFormat);
     } catch (err) {
-      setLocalError(err.response?.data?.error || 'Failed to start download');
-      setDownloading(false);
+      setLocalError(err.message || 'Failed to start download');
     }
   };
 
-  const handleCancel = async () => {
-    if (jobId) {
-      try {
-        await api.cancelDownload(jobId);
-        setJobId(null);
-      } catch (err) {
-        setLocalError('Failed to cancel download');
-      }
-    }
-  };
+  const downloadedMB = (downloadedSize / (1024 * 1024)).toFixed(2);
+  const totalMB = totalSize > 0 ? (totalSize / (1024 * 1024)).toFixed(2) : '?';
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-8">
@@ -70,7 +67,7 @@ export function DownloadPage() {
             />
             <button
               type="submit"
-              disabled={infoLoading || !url.trim()}
+              disabled={infoLoading || !url.trim() || downloading}
               className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-6 py-2 rounded-lg font-semibold transition-colors flex items-center gap-2"
             >
               {infoLoading ? <Loader className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5" />}
@@ -80,10 +77,10 @@ export function DownloadPage() {
         </form>
 
         {/* Errors */}
-        {(localError || infoError || formatsError || progressError) && (
+        {(localError || infoError || formatsError || downloadError) && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg mb-6 flex gap-3">
             <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
-            <p>{localError || infoError || formatsError || progressError}</p>
+            <p>{localError || infoError || formatsError || downloadError}</p>
           </div>
         )}
 
@@ -117,7 +114,7 @@ export function DownloadPage() {
         )}
 
         {/* Quality Selection */}
-        {formats && !jobId && (
+        {formats && !downloading && (
           <div className="mb-8">
             <label className="block text-sm font-semibold mb-4">Select Quality</label>
             
@@ -167,57 +164,88 @@ export function DownloadPage() {
         )}
 
         {/* Download Button */}
-        {info && formats && !jobId && (
+        {info && formats && !downloading && (
           <button
             onClick={handleDownload}
-            disabled={downloading}
-            className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white px-6 py-3 rounded-lg font-bold text-lg transition-colors flex items-center justify-center gap-2"
+            className="w-full bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-bold text-lg transition-colors flex items-center justify-center gap-2"
           >
-            {downloading ? <Loader className="w-6 h-6 animate-spin" /> : <Download className="w-6 h-6" />}
-            {downloading ? 'Starting...' : 'Download Video'}
+            <Download className="w-6 h-6" />
+            Start Download
           </button>
         )}
 
-        {/* Progress Display */}
-        {jobId && (
-          <div className="bg-gray-50 rounded-lg p-6">
-            <h3 className="text-lg font-bold mb-4">Downloading...</h3>
+        {/* Download Progress Display */}
+        {downloading && (
+          <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-blue-900">
+                {paused ? '⏸️ Download Paused' : '⬇️ Downloading...'}
+              </h3>
+              {progress === 100 && (
+                <span className="bg-green-500 text-white px-3 py-1 rounded-full text-sm font-semibold">
+                  ✓ Complete
+                </span>
+              )}
+            </div>
             
+            {/* Progress Bar */}
             <div className="mb-6">
               <div className="flex justify-between items-center mb-2">
                 <span className="text-sm font-semibold">{progress}%</span>
-                {done && <span className="text-green-600 font-semibold">Complete!</span>}
+                <span className="text-sm text-gray-600">
+                  {downloadedMB} MB / {totalMB} MB
+                </span>
               </div>
-              <div className="w-full h-4 bg-gray-300 rounded-full overflow-hidden">
+              <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden">
                 <div
-                  className={`h-full transition-all ${done ? 'bg-green-500' : 'bg-blue-500'}`}
+                  className={`h-full transition-all ${progress === 100 ? 'bg-green-500' : 'bg-blue-500'}`}
                   style={{ width: `${progress}%` }}
                 />
               </div>
             </div>
 
-            {raw && (
-              <p className="text-sm text-gray-600 mb-4 font-mono bg-white p-2 rounded border">
-                {raw}
-              </p>
+            {/* Control Buttons */}
+            {progress < 100 && (
+              <div className="flex gap-3">
+                {!paused ? (
+                  <button
+                    onClick={pauseDownload}
+                    className="flex-1 bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
+                  >
+                    <Pause className="w-5 h-5" />
+                    Pause
+                  </button>
+                ) : (
+                  <button
+                    onClick={resumeDownload}
+                    className="flex-1 bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
+                  >
+                    <PlayIcon className="w-5 h-5" />
+                    Resume
+                  </button>
+                )}
+                <button
+                  onClick={cancelDownload}
+                  className="flex-1 bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
             )}
 
-            {!done && (
-              <button
-                onClick={handleCancel}
-                className="w-full bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
-              >
-                Cancel Download
-              </button>
-            )}
-
-            {done && (
-              <button
-                onClick={() => setJobId(null)}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-semibold transition-colors"
-              >
-                Download Another Video
-              </button>
+            {progress === 100 && (
+              <div className="bg-green-100 border border-green-400 rounded-lg p-4 text-green-800">
+                <p className="font-semibold">✓ Download complete! Check your downloads folder.</p>
+                <button
+                  onClick={() => {
+                    setUrl('');
+                    setSelectedFormat('best');
+                  }}
+                  className="mt-3 w-full bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+                >
+                  Download Another Video
+                </button>
+              </div>
             )}
           </div>
         )}
@@ -225,3 +253,4 @@ export function DownloadPage() {
     </div>
   );
 }
+

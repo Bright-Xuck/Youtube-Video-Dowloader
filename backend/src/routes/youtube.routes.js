@@ -10,16 +10,7 @@ router.use(abuseDetectionMiddleware);
 router.get("/info", infoLimiter, controller.getVideoInfo);
 router.get("/formats", infoLimiter, controller.getFormats);
 
-// Download endpoints
-router.get("/download", downloadLimiter, controller.startDownload);
-router.get("/progress/:jobId", controller.streamProgress);
-router.post("/cancel/:jobId", controller.cancelDownloadJob);
-router.get("/downloads", controller.getActiveDownloads);
-
-// Disk management
-router.get("/disk-stats", controller.getDiskUsage);
-
-// Playlist endpoints
-router.get("/playlist/zip", playlistLimiter, controller.downloadPlaylistZip);
+// Browser-based streaming download
+router.get("/stream", downloadLimiter, controller.streamVideo);
 
 module.exports = router;

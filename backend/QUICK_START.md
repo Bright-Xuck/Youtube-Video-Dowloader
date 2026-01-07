@@ -6,18 +6,65 @@
 # 1. Navigate to backend folder
 cd "C:\Users\PC\Desktop\youtube video downloader\backend"
 
-# 2. Install dependencies (already done!)
+# 2. Install dependencies (if not already done)
 npm install
 
-# 3. Create .env file
-cp .env.example .env
-# Edit .env if needed (optional - defaults are fine)
-
-# 4. Start the server
+# 3. Start the server
 npm run dev
 ```
 
 Server will start on `http://localhost:3000`
+
+---
+
+## 🎬 Browser-Based Video Downloads
+
+**Videos download directly to your computer** - not stored on the server!
+
+### How It Works
+1. **Frontend** requests video stream from backend
+2. **Backend** uses yt-dlp to fetch video from YouTube
+3. **Video streamed directly to browser** in real-time
+4. **You control the download**: Pause, Resume, Cancel anytime
+5. **Auto-saved** to your Downloads folder (not server storage)
+
+### Key Benefits
+✅ No server disk space used  
+✅ Faster downloads (direct to you)  
+✅ Pause/Resume support  
+✅ Better privacy (videos on your machine)  
+✅ No cleanup needed
+
+### New Streaming Endpoint
+```
+GET /api/youtube/stream?url=<url>&format=<format>
+```
+Streams video directly to browser with real-time progress tracking
+
+---
+
+## 📊 Rate Limits & Quotas
+
+Default limits to prevent abuse and ensure fair usage:
+
+| Feature | Limit | Purpose |
+|---------|-------|---------|
+| General API Requests | 30/hour per IP | Prevent spam |
+| Download Requests | 50/hour per IP | Protect server resources |
+| Playlist Downloads | 5/day per IP | Prevent disk exhaustion |
+| Video Info Requests | 20/minute per IP | Prevent abuse |
+
+### Configuration
+Edit `.env` file to customize:
+```bash
+# Server port
+PORT=3000
+
+# Max disk space (in MB)
+MAX_DISK_SPACE_MB=5000
+```
+
+Rate limits are in `src/config.js` - modify the `rateLimits` object to change.
 
 ---
 
@@ -38,28 +85,14 @@ curl "http://localhost:3000/api/youtube/info?url=https://www.youtube.com/watch?v
 curl "http://localhost:3000/api/youtube/formats?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 ```
 
-### 4. Start a Download
+### 4. Stream Video to Browser
 ```bash
-curl "http://localhost:3000/api/youtube/download?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ&format=720p"
+# Browser will download the video automatically
+# Works for single videos AND playlists - same endpoint!
+curl "http://localhost:3000/api/youtube/stream?url=https://www.youtube.com/watch?v=dQw4w9WgXcQ&format=best"
 ```
 
-This returns a `jobId`. Use it to track progress:
-
-### 5. Monitor Progress
-```bash
-# In another terminal, stream progress updates
-curl "http://localhost:3000/api/youtube/progress/YOUR_JOB_ID"
-```
-
-### 6. Cancel a Download
-```bash
-curl -X POST "http://localhost:3000/api/youtube/cancel/YOUR_JOB_ID"
-```
-
-### 7. Check Disk Usage
-```bash
-curl "http://localhost:3000/api/youtube/disk-stats"
-```
+**That's it!** No complex download tracking needed. The browser handles pause/resume and automatically saves to Downloads folder.
 
 ---
 
@@ -71,23 +104,7 @@ curl "http://localhost:3000/api/youtube/disk-stats"
 
 ---
 
-## 🔧 Configuration
-
-Edit `.env` file to customize:
-
-```bash
-# Server port
-PORT=3000
-
-# Max disk space (in MB)
-MAX_DISK_SPACE_MB=5000
-```
-
-All rate limits are configured in [src/config.js](src/config.js)
-
----
-
-## 📂 Project Structure
+## � Project Structure
 
 ```
 backend/
@@ -100,10 +117,10 @@ backend/
 │   ├── services/
 │   │   └── ytdlp.service.js        ← Download logic
 │   └── utils/
-│       ├── diskManager.js          ← 🆕 Disk quota
-│       ├── cleanupScheduler.js     ← 🆕 Auto cleanup
-│       ├── rateLimiter.js          ← 🆕 Rate limiting
-│       ├── cancellationService.js  ← 🆕 Cancellation
+│       ├── diskManager.js          ← Disk quota & cleanup
+│       ├── cleanupScheduler.js     ← Auto cleanup timer
+│       ├── rateLimiter.js          ← Rate limiting
+│       ├── cancellationService.js  ← Stop downloads
 │       ├── progressStore.js        ← Progress tracking
 │       ├── validator.js            ← URL validation
 │       └── zipper.js               ← ZIP creation
@@ -112,78 +129,6 @@ backend/
 ├── package.json                     ← Dependencies
 └── .env                             ← Configuration
 ```
-
----
-
-## ✨ New Features
-
-✅ **Format Filtering** - Smart quality selection
-✅ **Disk Quota** - Automatic storage management  
-✅ **Cleanup Scheduler** - Hourly automatic cleanup
-✅ **Rate Limiting** - Protection against abuse
-✅ **Download Cancellation** - Stop downloads anytime
-✅ **Better Errors** - Helpful error messages
-✅ **Progress Tracking** - Real-time updates
-
----
-
-## 🐛 Bug Fixes
-
-- ✅ Fixed controller methods
-- ✅ Added proper error handling
-- ✅ Better validation
-- ✅ Faster progress updates
-- ✅ Better resource cleanup
-
----
-
-## 💡 Example: Complete Download Flow
-
-```javascript
-// 1. Get available formats
-const formats = await fetch(
-  'http://localhost:3000/api/youtube/formats?url=YOUR_URL'
-).then(r => r.json());
-
-// 2. Show formats to user - they pick one
-const selectedFormat = formats.presets[0]; // e.g., "Best Quality"
-
-// 3. Start download with selected format
-const { jobId } = await fetch(
-  `http://localhost:3000/api/youtube/download?url=YOUR_URL&format=${selectedFormat.format}`
-).then(r => r.json());
-
-// 4. Stream progress updates
-const es = new EventSource(`http://localhost:3000/api/youtube/progress/${jobId}`);
-
-es.onmessage = (event) => {
-  const { progress, raw, done, error } = JSON.parse(event.data);
-  
-  if (progress) {
-    console.log(`Progress: ${progress}%`);
-  }
-  
-  if (error) {
-    console.error('Download error:', error);
-    es.close();
-  }
-  
-  if (done) {
-    console.log('✅ Download complete!');
-    es.close();
-  }
-};
-
-// 5. (Optional) Cancel download if needed
-// await fetch(`http://localhost:3000/api/youtube/cancel/${jobId}`, { method: 'POST' });
-```
-
----
-
-## 🆘 Troubleshooting
-
-### Server won't start
-```bash
 # Check if port 3000 is in use
 # Change PORT in .env to 3001, etc
 PORT=3001 npm run dev

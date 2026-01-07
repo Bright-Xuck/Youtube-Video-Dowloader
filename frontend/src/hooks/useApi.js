@@ -169,3 +169,143 @@ export const useActiveDownloads = () => {
 
   return { downloads, loading, error, refetch };
 };
+/**
+ * Hook for browser-based video downloads with pause/resume support
+ */
+export const useBrowserDownload = () => {
+  const [progress, setProgress] = useState(0);
+  const [downloading, setDownloading] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [error, setError] = useState(null);
+  const [downloadedSize, setDownloadedSize] = useState(0);
+  const [totalSize, setTotalSize] = useState(0);
+
+  const abortControllerRef = useCallback(() => {
+    return new AbortController();
+  }, []);
+
+  const startDownload = useCallback(async (url, format) => {
+    setError(null);
+    setDownloading(true);
+    setPaused(false);
+    setProgress(0);
+    setDownloadedSize(0);
+    setTotalSize(0);
+
+    try {
+      const controller = new AbortController();
+      const response = await fetch(
+        `http://localhost:3000/api/youtube/stream?url=${encodeURIComponent(url)}&format=${encodeURIComponent(format)}`,
+        { signal: controller.signal }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
+
+      // Get total file size from Content-Length header if available
+      const contentLength = response.headers.get('content-length');
+      if (contentLength) {
+        setTotalSize(parseInt(contentLength, 10));
+      }
+
+      // Get filename from Content-Disposition header
+      const contentDisposition = response.headers.get('content-disposition');
+      let filename = 'download.mp4';
+      if (contentDisposition) {
+        const filenameMatch = contentDisposition.match(/filename="(.+?)"/);
+        if (filenameMatch) {
+          filename = filenameMatch[1];
+        }
+      }
+
+      // Read the response body as a stream
+      const reader = response.body.getReader();
+      const chunks = [];
+      let receivedLength = 0;
+
+      while (true) {
+        if (paused) {
+          // Wait while paused
+          await new Promise(resolve => {
+            const checkInterval = setInterval(() => {
+              if (!paused) {
+                clearInterval(checkInterval);
+                resolve();
+              }
+            }, 100);
+          });
+        }
+
+        try {
+          const { done, value } = await reader.read();
+
+          if (done) break;
+
+          chunks.push(value);
+          receivedLength += value.length;
+
+          // Update progress
+          if (contentLength) {
+            const progressPercent = (receivedLength / parseInt(contentLength, 10)) * 100;
+            setProgress(Math.round(progressPercent));
+          }
+          setDownloadedSize(receivedLength);
+        } catch (err) {
+          if (err.name === 'AbortError') {
+            setError('Download cancelled');
+          } else {
+            throw err;
+          }
+          break;
+        }
+      }
+
+      // Create blob and download
+      const blob = new Blob(chunks, { type: 'video/mp4' });
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const downloadLink = document.createElement('a');
+      downloadLink.href = downloadUrl;
+      downloadLink.download = filename;
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      document.body.removeChild(downloadLink);
+      window.URL.revokeObjectURL(downloadUrl);
+
+      setProgress(100);
+      setDownloading(false);
+    } catch (err) {
+      setError(err.message);
+      setDownloading(false);
+    }
+  }, [paused]);
+
+  const pauseDownload = useCallback(() => {
+    setPaused(true);
+  }, []);
+
+  const resumeDownload = useCallback(() => {
+    setPaused(false);
+  }, []);
+
+  const cancelDownload = useCallback(() => {
+    setDownloading(false);
+    setPaused(false);
+    setProgress(0);
+    setError('Download cancelled by user');
+  }, []);
+
+  return {
+    progress,
+    downloading,
+    paused,
+    error,
+    downloadedSize,
+    totalSize,
+    startDownload,
+    pauseDownload,
+    resumeDownload,
+    cancelDownload
+  };
+};

@@ -1,12 +1,8 @@
 const { default: YTDlpWrap } = require("yt-dlp-wrap");
-const path = require("path");
 const { setProgress, clearProgress } = require("../utils/progressStore");
 const { createCancellationToken, attachProcess, isCancelled } = require("../utils/cancellationService");
-const { isDiskQuotaExceeded } = require("../utils/diskManager");
-const fs = require("fs-extra");
 
 const ytDlp = new YTDlpWrap();
-const DOWNLOAD_DIR = path.join(__dirname, "../../downloads");
 
 /**
  * Get video information
@@ -123,97 +119,84 @@ exports.getFormats = async (url) => {
   }
 };
 
-exports.downloadWithProgress = async ({ url, format, isPlaylist, jobId }) => {
-  // Check disk quota before downloading
-  const quotaExceeded = await isDiskQuotaExceeded();
-  if (quotaExceeded) {
-    setProgress(jobId, { error: "Disk quota exceeded", done: true });
-    throw new Error("Disk quota exceeded");
-  }
+/**
+ * Stream video directly to browser (no disk storage)
+ * Supports HTTP Range requests for pause/resume
+ */
+exports.streamVideoToBrowser = async ({ url, format, jobId, responseStream }) => {
+  try {
+    // Get video info to set proper headers
+    const info = await ytDlp.getVideoInfo(url);
+    const videoTitle = info.title || "video";
+    const fileExt = "mp4";
+    
+    // Create cancellation token
+    const cancellationToken = createCancellationToken(jobId, url);
 
-  // Create cancellation token
-  const cancellationToken = createCancellationToken(jobId, url);
+    const args = [
+      url,
+      "-f", format || "bv*+ba/b",
+      "--merge-output-format", "mp4",
+      "-o", "-", // Stream to stdout
+      "--newline"
+    ];
 
-  const outputTemplate = isPlaylist
-    ? `${DOWNLOAD_DIR}/%(playlist)s/%(title)s.%(ext)s`
-    : `${DOWNLOAD_DIR}/%(title)s.%(ext)s`;
+    const process = ytDlp.exec(args);
+    attachProcess(jobId, process);
 
-  const args = [
-    url,
-    "-f", format || "bv*+ba/b",
-    "--merge-output-format", "mp4",
-    "--newline",
-    isPlaylist ? "--yes-playlist" : "--no-playlist",
-    "-o", outputTemplate
-  ];
+    let totalSize = 0;
+    let downloadedSize = 0;
 
-  const process = ytDlp.exec(args);
-  
-  // Attach process to cancellation token
-  attachProcess(jobId, process);
+    // Track progress
+    process.stdout.on("data", (chunk) => {
+      if (isCancelled(jobId)) {
+        process.kill();
+        responseStream.destroy();
+        return;
+      }
 
-  process.stdout.on("data", (data) => {
-    // Check if download was cancelled
-    if (isCancelled(jobId)) {
-      process.kill();
-      return;
-    }
+      downloadedSize += chunk.length;
+      responseStream.write(chunk);
 
-    const line = data.toString();
-
-    // Example: [download]  45.6% of ...
-    const match = line.match(/(\d+(\.\d+)?)%/);
-
-    if (match) {
+      // Update progress
       setProgress(jobId, {
-        progress: Number(match[1]),
-        raw: line.trim()
+        progress: totalSize > 0 ? (downloadedSize / totalSize) * 100 : 0,
+        downloaded: downloadedSize,
+        total: totalSize,
+        raw: `Streaming: ${(downloadedSize / (1024 * 1024)).toFixed(2)} MB`
       });
-    }
-  });
+    });
 
-  process.on("close", () => {
-    setProgress(jobId, { progress: 100, done: true });
-    setTimeout(() => clearProgress(jobId), 10000);
-  });
+    process.stderr.on("data", (data) => {
+      const line = data.toString();
+      
+      // Try to extract total file size from yt-dlp output
+      const sizeMatch = line.match(/total_bytes["\']?\s*[=:]\s*(\d+)/);
+      if (sizeMatch && !totalSize) {
+        totalSize = parseInt(sizeMatch[1]);
+      }
+    });
 
-  process.on("error", (err) => {
+    process.on("close", (code) => {
+      if (code === 0) {
+        responseStream.end();
+        setProgress(jobId, { progress: 100, done: true });
+      } else {
+        responseStream.destroy();
+        setProgress(jobId, { error: `Stream failed with code ${code}`, done: true });
+      }
+      setTimeout(() => clearProgress(jobId), 10000);
+    });
+
+    process.on("error", (err) => {
+      responseStream.destroy();
+      setProgress(jobId, { error: err.message, done: true });
+    });
+
+    return { process, videoTitle, fileExt };
+  } catch (err) {
     setProgress(jobId, { error: err.message, done: true });
-  });
-
-  return process;
+    throw err;
+  }
 };
 
-exports.downloadPlaylist = async ({ url, jobId }) => {
-  const playlistDir = path.join(
-    __dirname,
-    "../../downloads",
-    `playlist-${jobId}`
-  );
-
-  await fs.ensureDir(playlistDir);
-
-  const args = [
-    url,
-    "-f", "bv*+ba/b",
-    "--merge-output-format", "mp4",
-    "--yes-playlist",
-    "--newline",
-    "-o", `${playlistDir}/%(title)s.%(ext)s`
-  ];
-
-  const process = ytDlp.exec(args);
-
-  process.stdout.on("data", data => {
-    const line = data.toString();
-    const match = line.match(/(\d+(\.\d+)?)%/);
-    if (match) {
-      setProgress(jobId, { progress: Number(match[1]) });
-    }
-  });
-
-  // Attach process to cancellation token
-  attachProcess(jobId, process, playlistDir);
-
-  return { process, playlistDir };
-};

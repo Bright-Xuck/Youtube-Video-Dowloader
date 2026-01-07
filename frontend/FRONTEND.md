@@ -14,6 +14,44 @@ A modern, responsive React-based frontend for downloading YouTube videos and pla
 - **Help & FAQ**: Comprehensive documentation and troubleshooting guide
 - **Responsive Design**: Mobile-friendly interface using Tailwind CSS
 
+## ❓ How Does It Work?
+
+### Browser-Based Download Process
+1. **You submit a YouTube URL** in the frontend
+2. **Backend fetches video info** using yt-dlp
+3. **You select quality/format** from available options
+4. **Click "Start Download"** - Backend streams video directly to your browser
+5. **Real-time progress shown** with pause/resume controls
+6. **You control the download**: Pause, Resume, or Cancel anytime
+7. **Video auto-saves** to your Downloads folder (not the server)
+
+### Pause & Resume
+- **Pause Button**: Temporarily pause the download
+- **Resume Button**: Continue from where you paused
+- **Cancel Button**: Stop download completely
+
+### Where Are My Videos?
+Downloaded videos go directly to **your computer's Downloads folder**:
+- **Windows**: `C:\Users\YourName\Downloads\VideoTitle.mp4`
+- **Mac/Linux**: `~/Downloads/VideoTitle.mp4`
+
+They appear in your browser's normal download list and are immediately accessible!
+
+### Why Browser-Based?
+✅ **Faster speeds** - Direct streaming, no server bottleneck  
+✅ **Pause/Resume** - Full control over downloads  
+✅ **No server storage** - Videos not stored on server  
+✅ **Instant access** - Files in Downloads folder immediately  
+✅ **Better privacy** - Videos stay on your machine  
+
+### Rate Limiting & Download Quota
+The app protects against abuse with:
+- **50 downloads/hour per IP** - Prevent server spam
+- **5 playlists/day per IP** - Fair usage policy  
+- **20 info requests/minute** - Prevent API abuse
+
+See [backend QUICK_START.md](../backend/QUICK_START.md) for customization.
+
 ## 📋 Prerequisites
 
 - Node.js 16+ with npm
@@ -24,7 +62,7 @@ A modern, responsive React-based frontend for downloading YouTube videos and pla
 
 1. **Navigate to frontend directory**:
    ```bash
-   cd "youtube video downloader"
+   cd frontend
    ```
 
 2. **Install dependencies**:
@@ -32,7 +70,7 @@ A modern, responsive React-based frontend for downloading YouTube videos and pla
    npm install
    ```
 
-3. **Ensure backend is running**:
+3. **Ensure backend is running** (in another terminal):
    ```bash
    cd ../backend
    npm run dev
@@ -40,7 +78,6 @@ A modern, responsive React-based frontend for downloading YouTube videos and pla
 
 4. **Start development server**:
    ```bash
-   cd ../"youtube video downloader"
    npm run dev
    ```
 
@@ -82,12 +119,9 @@ The frontend communicates with the backend API at `http://localhost:3000/api/you
 |--------|----------|---------|
 | GET | `/info` | Get video/playlist information |
 | GET | `/formats` | Get available quality formats |
-| POST | `/download` | Start a new download |
-| GET | `/progress/:jobId` | Get download progress (SSE) |
-| POST | `/cancel/:jobId` | Cancel an active download |
-| GET | `/active` | Get all active downloads |
-| GET | `/disk-stats` | Get disk usage statistics |
-| POST | `/playlist-zip` | Download playlist as ZIP |
+| GET | `/stream` | Stream video directly to browser (supports pause/resume) |
+
+**All downloads** (single videos, playlists, etc.) use the single `/stream` endpoint with `url` and `format` query parameters. The browser handles pause/resume and automatic saving to your Downloads folder.
 
 ## 🎯 Page Components
 
@@ -102,8 +136,10 @@ The frontend communicates with the backend API at `http://localhost:3000/api/you
 - Video information display (thumbnail, title, uploader, duration, views, rating)
 - Quality preset selector (5 presets)
 - Detailed format selector (up to 20 formats)
-- Real-time progress tracking
-- Download cancellation
+- **Real-time progress tracking** with MB/size display
+- **Pause/Resume controls** - Full download control
+- Cancel button to stop download
+- Browser automatically saves video to Downloads folder
 
 ### DownloadsPage
 - Active downloads list
