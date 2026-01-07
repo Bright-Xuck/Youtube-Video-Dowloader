@@ -47,16 +47,72 @@ export function PlaylistPage() {
     }
   };
 
+  const playlistStopRef = useRef(false);
+
   const handleDownloadPlaylist = async () => {
     setLocalError(null);
 
+    // Fetch flat list of videos in playlist
     try {
-      // Download playlist videos as individual files
-      // (Browser will handle them based on browser's download settings)
-      await startDownload(url, 'bv*+ba/b');
+      const resp = await (await fetch(`http://localhost:3000/api/youtube/playlist-videos?url=${encodeURIComponent(url)}`));
+      if (!resp.ok) {
+        const err = await resp.json();
+        throw new Error(err.details || err.error || 'Failed to fetch playlist videos');
+      }
+      const data = await resp.json();
+      const videos = data.videos || [];
+      if (videos.length === 0) {
+        throw new Error('No videos found in playlist');
+      }
+
+      // Launch native browser downloads for each video sequentially
+      playlistStopRef.current = false;
+      setLocalError(null);
+
+      for (let i = 0; i < videos.length; i++) {
+        if (playlistStopRef.current) break;
+
+        // Respect pause (wait while paused)
+        while (paused) {
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((r) => setTimeout(r, 200));
+          if (playlistStopRef.current) break;
+        }
+
+        const videoUrl = videos[i].url;
+        const streamUrl = `http://localhost:3000/api/youtube/stream?url=${encodeURIComponent(videoUrl)}&format=${encodeURIComponent('bv*+ba/b')}`;
+
+        // Create anchor and click it synchronously (user gesture context)
+        const a = document.createElement('a');
+        a.href = streamUrl;
+        a.target = '_blank';
+        a.rel = 'noreferrer noopener';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+
+        // Small delay to reduce popup-blocker risk
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 350));
+      }
+
+      if (playlistStopRef.current) {
+        setLocalError('Playlist download cancelled');
+      }
     } catch (err) {
-      setLocalError(err.message || 'Failed to download playlist');
+      // Fallback: stream playlist as before
+      try {
+        await startDownload(url, 'bv*+ba/b');
+      } catch (streamErr) {
+        setLocalError(streamErr.message || err.message || 'Failed to download playlist');
+      }
     }
+  };
+
+  const cancelPlaylistDownload = () => {
+    playlistStopRef.current = true;
+    // also call cancelDownload to update global state
+    cancelDownload();
   };
 
   const downloadedMB = (downloadedSize / (1024 * 1024)).toFixed(2);
