@@ -43,6 +43,51 @@ exports.getPlaylistInfo = async (url) => {
 };
 
 /**
+ * Get flat list of videos in a playlist without fetching all video metadata
+ */
+exports.getPlaylistVideos = async (url) => {
+  try {
+    const isPlaylist = url.includes('list=');
+    if (!isPlaylist) throw new Error('This is not a playlist URL');
+
+    // Try using yt-dlp to return a flat JSON playlist (-J --flat-playlist)
+    const args = ['-J', '--flat-playlist', url];
+    const child = require('child_process').spawn(process.env.YTDLP_PATH || 'yt-dlp', args, { shell: false });
+
+    let out = '';
+    for await (const chunk of child.stdout) {
+      out += chunk.toString();
+    }
+
+    // Wait for process to finish
+    const code = await new Promise((resolve) => child.on('close', resolve));
+    if (code !== 0) {
+      throw new Error('yt-dlp failed to list playlist entries');
+    }
+
+    const parsed = JSON.parse(out);
+    const entries = parsed.entries || [];
+    const videos = entries.map(e => ({
+      id: e.id,
+      title: e.title || e.id,
+      url: e.webpage_url || (e.id ? `https://youtu.be/${e.id}` : null)
+    })).filter(v => v.url);
+
+    return videos;
+  } catch (err) {
+    // Fallback: try getVideoInfo and parse entries if available
+    try {
+      const info = await ytDlp.getVideoInfo(url);
+      const entries = info.entries || [];
+      const videos = entries.map(e => ({ id: e.id, title: e.title, url: e.webpage_url })).filter(v => v.url);
+      return videos;
+    } catch (err2) {
+      throw new Error(`Failed to fetch playlist videos: ${err.message}; fallback: ${err2.message}`);
+    }
+  }
+};
+
+/**
  * Get video information
  */
 exports.getInfo = async (url) => {
@@ -186,9 +231,10 @@ exports.streamVideoToBrowser = async ({ url, format, jobId, responseStream }) =>
     console.log(`[YTDLP] Starting download for job ${jobId} with format: ${format}`);
     
     // Use spawn to create the yt-dlp process directly
-    const childProcess = spawn("yt-dlp", args, {
+    const ytDlpCmd = process.env.YTDLP_PATH || 'yt-dlp';
+    const childProcess = spawn(ytDlpCmd, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
-      shell: true
+      shell: false
     });
 
     if (!childProcess) {
@@ -295,11 +341,14 @@ exports.streamVideoToBrowser = async ({ url, format, jobId, responseStream }) =>
     });
 
     childProcess.on("error", (err) => {
-      console.error(`[YTDLP] Process error for job ${jobId}:`, err.message);
+      console.error(`[YTDLP] Process error for job ${jobId}:`, err && err.message ? err.message : err);
       if (!hasError) {
         hasError = true;
         responseStream.destroy();
-        setProgress(jobId, { error: err.message, done: true });
+        const message = (err && err.code === 'ENOENT')
+          ? 'yt-dlp executable not found. Install yt-dlp and ensure it is on PATH or set YTDLP_PATH.'
+          : (err && err.message) || 'Unknown process error';
+        setProgress(jobId, { error: message, done: true });
       }
     });
 

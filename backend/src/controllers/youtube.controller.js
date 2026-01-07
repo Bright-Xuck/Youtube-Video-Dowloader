@@ -50,6 +50,29 @@ exports.getPlaylistInfo = async (req, res) => {
 };
 
 /**
+ * GET /api/youtube/playlist-videos - Get list of video URLs in a playlist (flat)
+ */
+exports.getPlaylistVideos = async (req, res) => {
+  const { url } = req.query;
+
+  if (!url) {
+    return res.status(400).json({ error: "URL is required" });
+  }
+
+  if (!isValidYouTubeUrl(url)) {
+    return res.status(400).json({ error: "Invalid YouTube URL" });
+  }
+
+  try {
+    const videos = await ytService.getPlaylistVideos(url);
+    res.json({ videos });
+  } catch (err) {
+    console.error("Error fetching playlist videos:", err);
+    res.status(500).json({ error: "Failed to fetch playlist videos", details: err.message });
+  }
+};
+
+/**
  * GET /api/youtube/formats - Get available video formats (filtered)
  */
 exports.getFormats = async (req, res) => {

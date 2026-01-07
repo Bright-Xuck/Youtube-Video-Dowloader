@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { api } from '../services/api';
 
 export const useProgressStream = (jobId) => {
@@ -179,34 +179,62 @@ export const useBrowserDownload = () => {
   const [error, setError] = useState(null);
   const [downloadedSize, setDownloadedSize] = useState(0);
   const [totalSize, setTotalSize] = useState(0);
-  const [controller, setController] = useState(null);
-  const [isDownloading, setIsDownloading] = useState(false);
+  
+  // Use refs to track mutable state
+  const controllerRef = useRef(null);
+  const isActiveRef = useRef(false);
 
   const startDownload = useCallback(async (url, format) => {
+    console.log('[DOWNLOAD] Starting download...', { url, format });
+    
     setError(null);
     setDownloading(true);
-    setIsDownloading(true);
     setPaused(false);
     setProgress(0);
     setDownloadedSize(0);
     setTotalSize(0);
+    isActiveRef.current = true;
 
     try {
       const abortController = new AbortController();
-      setController(abortController);
+      controllerRef.current = abortController;
 
-      const response = await fetch(
-        `http://localhost:3000/api/youtube/stream?url=${encodeURIComponent(url)}&format=${encodeURIComponent(format)}`,
-        { signal: abortController.signal }
-      );
+      const streamUrl = `http://localhost:3000/api/youtube/stream?url=${encodeURIComponent(url)}&format=${encodeURIComponent(format)}`;
+      console.log('[DOWNLOAD] Fetching from:', streamUrl);
+
+      // If this is a single video (not a playlist), prefer letting the browser handle the download
+      const isPlaylist = /[?&]list=/.test(url);
+      if (!isPlaylist) {
+        try {
+          // Open the stream URL directly so the browser shows it in the downloads UI
+          window.open(streamUrl, '_blank');
+          // Let the browser manage the download; close our UI state
+          setProgress(0);
+          setDownloading(false);
+          controllerRef.current = null;
+          isActiveRef.current = false;
+          return; // Native download started
+        } catch (err) {
+          console.warn('[DOWNLOAD] Native download failed, falling back to fetch streaming', err);
+          // fallthrough to fetch-based streaming
+        }
+      }
+
+      const response = await fetch(streamUrl, { 
+        signal: abortController.signal,
+        method: 'GET'
+      });
+
+      console.log('[DOWNLOAD] Response status:', response.status);
 
       if (!response.ok) {
         let errorMessage = `HTTP ${response.status}`;
         try {
           const errorData = await response.json();
-          errorMessage = errorData.error || errorMessage;
+          errorMessage = errorData.error || errorData.details || errorMessage;
+          console.error('[DOWNLOAD] Error response:', errorData);
         } catch (e) {
-          // If response is not JSON, use the status message
+          console.error('[DOWNLOAD] Could not parse error response');
         }
         throw new Error(errorMessage);
       }
@@ -214,7 +242,11 @@ export const useBrowserDownload = () => {
       // Get total file size from Content-Length header if available
       const contentLength = response.headers.get('content-length');
       if (contentLength) {
-        setTotalSize(parseInt(contentLength, 10));
+        const size = parseInt(contentLength, 10);
+        setTotalSize(size);
+        console.log('[DOWNLOAD] Total size:', (size / (1024 * 1024)).toFixed(2), 'MB');
+      } else {
+        console.log('[DOWNLOAD] No content-length header found');
       }
 
       // Get filename from Content-Disposition header
@@ -224,46 +256,71 @@ export const useBrowserDownload = () => {
         const filenameMatch = contentDisposition.match(/filename="(.+?)"/);
         if (filenameMatch) {
           filename = filenameMatch[1];
+          console.log('[DOWNLOAD] Filename:', filename);
         }
+      }
+
+      // Check if response.body is available
+      if (!response.body) {
+        throw new Error('Response body is not available for streaming');
       }
 
       // Read the response body as a stream
       const reader = response.body.getReader();
       const chunks = [];
       let receivedLength = 0;
+      let lastLogTime = Date.now();
 
-      while (isDownloading) {
+      console.log('[DOWNLOAD] Starting to read stream...');
+
+      while (isActiveRef.current) {
         try {
           const { done, value } = await reader.read();
 
-          if (done) break;
+          if (done) {
+            console.log('[DOWNLOAD] Stream complete');
+            break;
+          }
 
           chunks.push(value);
           receivedLength += value.length;
 
           // Update progress
-          if (contentLength) {
-            const progressPercent = (receivedLength / parseInt(contentLength, 10)) * 100;
-            setProgress(Math.round(progressPercent));
-          }
+          const progressPercent = contentLength 
+            ? Math.min((receivedLength / parseInt(contentLength, 10)) * 100, 99)
+            : 0;
+          
+          setProgress(Math.round(progressPercent));
           setDownloadedSize(receivedLength);
+
+          // Log progress periodically
+          const now = Date.now();
+          if (now - lastLogTime > 2000) {
+            console.log('[DOWNLOAD] Progress:', 
+              Math.round(progressPercent) + '%', 
+              (receivedLength / (1024 * 1024)).toFixed(2) + ' MB'
+            );
+            lastLogTime = now;
+          }
         } catch (err) {
           if (err.name === 'AbortError') {
+            console.log('[DOWNLOAD] Download was cancelled');
             setError('Download cancelled');
-          } else {
-            throw err;
+            break;
           }
-          break;
+          throw err;
         }
       }
 
-      if (!isDownloading) {
+      if (!isActiveRef.current) {
         // Download was cancelled
+        console.log('[DOWNLOAD] Download was cancelled by user');
         reader.cancel();
         setDownloading(false);
-        setIsDownloading(false);
         return;
       }
+
+      console.log('[DOWNLOAD] Creating blob and triggering download...');
 
       // Create blob and download
       const blob = new Blob(chunks, { type: 'video/mp4' });
@@ -276,41 +333,46 @@ export const useBrowserDownload = () => {
       document.body.removeChild(downloadLink);
       window.URL.revokeObjectURL(downloadUrl);
 
+      console.log('[DOWNLOAD] Download complete!');
       setProgress(100);
       setDownloading(false);
-      setIsDownloading(false);
+      
     } catch (err) {
-      console.error('Download error:', err);
+      console.error('[DOWNLOAD] Download error:', err);
       setError(err.message || 'Download failed');
       setDownloading(false);
-      setIsDownloading(false);
+      isActiveRef.current = false;
     }
-  }, [isDownloading]);
+  }, []);
 
   const pauseDownload = useCallback(() => {
+    console.log('[DOWNLOAD] Pausing download...');
     setPaused(true);
-    if (controller) {
-      controller.abort();
+    if (controllerRef.current) {
+      controllerRef.current.abort();
     }
-  }, [controller]);
+  }, []);
 
   const resumeDownload = useCallback(() => {
+    console.log('[DOWNLOAD] Resume not implemented - user needs to restart');
     // Resume is not directly supported with AbortController
     // The user will need to restart the download
     setPaused(false);
+    setError('Please restart the download. Resume is not yet supported.');
   }, []);
 
   const cancelDownload = useCallback(() => {
-    setIsDownloading(false);
+    console.log('[DOWNLOAD] Cancelling download...');
+    isActiveRef.current = false;
     setDownloading(false);
     setPaused(false);
     setProgress(0);
     setDownloadedSize(0);
-    if (controller) {
-      controller.abort();
+    if (controllerRef.current) {
+      controllerRef.current.abort();
     }
     setError('Download cancelled by user');
-  }, [controller]);
+  }, []);
 
   return {
     progress,

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { Download, AlertCircle, Loader, Music, Pause, Play as PlayIcon } from 'lucide-react';
 import { useVideoInfo, useBrowserDownload } from '../hooks/useApi';
 

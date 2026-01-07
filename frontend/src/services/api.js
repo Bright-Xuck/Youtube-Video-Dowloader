@@ -19,6 +19,11 @@ export const api = {
     return `${API_BASE}/stream?url=${encodeURIComponent(url)}&format=${encodeURIComponent(format)}`;
   },
 
+  // Get flat list of videos in a playlist
+  getPlaylistVideos: (url) => {
+    return axios.get(`${API_BASE}/playlist-videos`, { params: { url } });
+  },
+
   // Health check
   healthCheck: () => {
     return axios.get('http://localhost:3000/health');
