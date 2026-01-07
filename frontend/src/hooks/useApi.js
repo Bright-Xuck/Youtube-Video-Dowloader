@@ -179,29 +179,36 @@ export const useBrowserDownload = () => {
   const [error, setError] = useState(null);
   const [downloadedSize, setDownloadedSize] = useState(0);
   const [totalSize, setTotalSize] = useState(0);
-
-  const abortControllerRef = useCallback(() => {
-    return new AbortController();
-  }, []);
+  const [controller, setController] = useState(null);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const startDownload = useCallback(async (url, format) => {
     setError(null);
     setDownloading(true);
+    setIsDownloading(true);
     setPaused(false);
     setProgress(0);
     setDownloadedSize(0);
     setTotalSize(0);
 
     try {
-      const controller = new AbortController();
+      const abortController = new AbortController();
+      setController(abortController);
+
       const response = await fetch(
         `http://localhost:3000/api/youtube/stream?url=${encodeURIComponent(url)}&format=${encodeURIComponent(format)}`,
-        { signal: controller.signal }
+        { signal: abortController.signal }
       );
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `HTTP ${response.status}`);
+        let errorMessage = `HTTP ${response.status}`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorMessage;
+        } catch (e) {
+          // If response is not JSON, use the status message
+        }
+        throw new Error(errorMessage);
       }
 
       // Get total file size from Content-Length header if available
@@ -225,19 +232,7 @@ export const useBrowserDownload = () => {
       const chunks = [];
       let receivedLength = 0;
 
-      while (true) {
-        if (paused) {
-          // Wait while paused
-          await new Promise(resolve => {
-            const checkInterval = setInterval(() => {
-              if (!paused) {
-                clearInterval(checkInterval);
-                resolve();
-              }
-            }, 100);
-          });
-        }
-
+      while (isDownloading) {
         try {
           const { done, value } = await reader.read();
 
@@ -262,6 +257,14 @@ export const useBrowserDownload = () => {
         }
       }
 
+      if (!isDownloading) {
+        // Download was cancelled
+        reader.cancel();
+        setDownloading(false);
+        setIsDownloading(false);
+        return;
+      }
+
       // Create blob and download
       const blob = new Blob(chunks, { type: 'video/mp4' });
       const downloadUrl = window.URL.createObjectURL(blob);
@@ -275,26 +278,39 @@ export const useBrowserDownload = () => {
 
       setProgress(100);
       setDownloading(false);
+      setIsDownloading(false);
     } catch (err) {
-      setError(err.message);
+      console.error('Download error:', err);
+      setError(err.message || 'Download failed');
       setDownloading(false);
+      setIsDownloading(false);
     }
-  }, [paused]);
+  }, [isDownloading]);
 
   const pauseDownload = useCallback(() => {
     setPaused(true);
-  }, []);
+    if (controller) {
+      controller.abort();
+    }
+  }, [controller]);
 
   const resumeDownload = useCallback(() => {
+    // Resume is not directly supported with AbortController
+    // The user will need to restart the download
     setPaused(false);
   }, []);
 
   const cancelDownload = useCallback(() => {
+    setIsDownloading(false);
     setDownloading(false);
     setPaused(false);
     setProgress(0);
+    setDownloadedSize(0);
+    if (controller) {
+      controller.abort();
+    }
     setError('Download cancelled by user');
-  }, []);
+  }, [controller]);
 
   return {
     progress,

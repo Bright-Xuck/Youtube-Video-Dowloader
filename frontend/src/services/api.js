@@ -13,86 +13,10 @@ export const api = {
     return axios.get(`${API_BASE}/formats`, { params: { url } });
   },
 
-  // Start a download
-  startDownload: (url, format, isPlaylist = false) => {
-    return axios.get(`${API_BASE}/download`, {
-      params: { url, format, playlist: isPlaylist }
-    });
-  },
-
-  // Stream progress (SSE)
-  streamProgress: (jobId) => {
-    return new Promise((resolve, reject) => {
-      const eventSource = new EventSource(`${API_BASE}/progress/${jobId}`);
-      
-      const updates = [];
-      eventSource.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          updates.push(data);
-          resolve({ ...data, updates });
-          
-          if (data.done || data.error) {
-            eventSource.close();
-          }
-        } catch (err) {
-          reject(err);
-          eventSource.close();
-        }
-      };
-
-      eventSource.onerror = () => {
-        eventSource.close();
-        reject(new Error('Progress stream error'));
-      };
-    });
-  },
-
-  // Get progress updates (alternative to SSE with polling)
-  getProgress: (jobId) => {
-    return new Promise((resolve, reject) => {
-      const eventSource = new EventSource(`${API_BASE}/progress/${jobId}`);
-      
-      eventSource.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          resolve(data);
-          if (data.done || data.error) {
-            eventSource.close();
-          }
-        } catch (err) {
-          reject(err);
-        }
-      };
-
-      eventSource.onerror = () => {
-        eventSource.close();
-        reject(new Error('Failed to connect to progress stream'));
-      };
-    });
-  },
-
-  // Cancel a download
-  cancelDownload: (jobId) => {
-    return axios.post(`${API_BASE}/cancel/${jobId}`);
-  },
-
-  // Get active downloads
-  getActiveDownloads: () => {
-    return axios.get(`${API_BASE}/downloads`);
-  },
-
-  // Get disk statistics
-  getDiskStats: () => {
-    return axios.get(`${API_BASE}/disk-stats`);
-  },
-
-  // Download playlist as ZIP
-  downloadPlaylistZip: (url) => {
-    return axios.get(`${API_BASE}/playlist/zip`, {
-      params: { url },
-      responseType: 'blob'
-    });
+  // Stream video directly to browser (browser-based download)
+  // Works for both single videos and playlists
+  streamVideo: (url, format = 'bv*+ba/b') => {
+    return `${API_BASE}/stream?url=${encodeURIComponent(url)}&format=${encodeURIComponent(format)}`;
   },
 
   // Health check

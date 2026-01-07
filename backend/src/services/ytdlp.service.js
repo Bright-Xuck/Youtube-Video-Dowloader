@@ -1,14 +1,59 @@
 const { default: YTDlpWrap } = require("yt-dlp-wrap");
+const { spawn } = require("child_process");
 const { setProgress, clearProgress } = require("../utils/progressStore");
 const { createCancellationToken, attachProcess, isCancelled } = require("../utils/cancellationService");
 
 const ytDlp = new YTDlpWrap();
 
 /**
+ * Get playlist information without fetching all video details
+ */
+exports.getPlaylistInfo = async (url) => {
+  try {
+    const isPlaylist = url.includes('list=');
+    if (!isPlaylist) {
+      throw new Error('This is not a playlist URL');
+    }
+
+    // Use yt-dlp to get just the playlist metadata
+    // We extract title, uploader, and count using a simple approach
+    const info = await ytDlp.getVideoInfo(url);
+    
+    return {
+      title: info.title || 'Playlist',
+      uploader: info.uploader || 'Unknown',
+      description: info.description || '',
+      thumbnail: info.thumbnail || null,
+      playlist_count: info.playlist_count || 0,
+      webpage_url: info.webpage_url || url
+    };
+  } catch (err) {
+    const errorMsg = err.message || err.toString();
+    
+    if (errorMsg.includes("age-restricted") || errorMsg.includes("restricted")) {
+      throw new Error("Playlist is age-restricted. Cannot retrieve information without authentication.");
+    } else if (errorMsg.includes("unavailable") || errorMsg.includes("not found")) {
+      throw new Error("Playlist is unavailable or has been removed.");
+    } else if (errorMsg.includes("This is not a playlist")) {
+      throw new Error(errorMsg);
+    } else {
+      throw new Error(`Failed to fetch playlist info: ${errorMsg.substring(0, 200)}`);
+    }
+  }
+};
+
+/**
  * Get video information
  */
 exports.getInfo = async (url) => {
   try {
+    // For playlists, only get info about the playlist itself, not all videos
+    const isPlaylist = url.includes('list=');
+    
+    const options = {
+      timeout: isPlaylist ? 30000 : 15000  // Longer timeout for playlists
+    };
+
     const result = await ytDlp.getVideoInfo(url);
     return JSON.stringify(result);
   } catch (err) {
@@ -21,6 +66,8 @@ exports.getInfo = async (url) => {
       throw new Error("Video is unavailable or has been removed.");
     } else if (errorMsg.includes("Signature extraction failed")) {
       throw new Error("yt-dlp needs to be updated. Run: yt-dlp -U");
+    } else if (errorMsg.includes("timeout") || errorMsg.includes("ETIMEDOUT")) {
+      throw new Error("Request timed out. The video/playlist may be too large or there's a network issue.");
     } else {
       throw new Error(`Failed to fetch video info: ${errorMsg.substring(0, 200)}`);
     }
@@ -121,15 +168,9 @@ exports.getFormats = async (url) => {
 
 /**
  * Stream video directly to browser (no disk storage)
- * Supports HTTP Range requests for pause/resume
  */
 exports.streamVideoToBrowser = async ({ url, format, jobId, responseStream }) => {
   try {
-    // Get video info to set proper headers
-    const info = await ytDlp.getVideoInfo(url);
-    const videoTitle = info.title || "video";
-    const fileExt = "mp4";
-    
     // Create cancellation token
     const cancellationToken = createCancellationToken(jobId, url);
 
@@ -138,63 +179,133 @@ exports.streamVideoToBrowser = async ({ url, format, jobId, responseStream }) =>
       "-f", format || "bv*+ba/b",
       "--merge-output-format", "mp4",
       "-o", "-", // Stream to stdout
-      "--newline"
+      "--quiet",
+      "--no-warnings"
     ];
 
-    const process = ytDlp.exec(args);
-    attachProcess(jobId, process);
+    console.log(`[YTDLP] Starting download for job ${jobId} with format: ${format}`);
+    
+    // Use spawn to create the yt-dlp process directly
+    const childProcess = spawn("yt-dlp", args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: true
+    });
+
+    if (!childProcess) {
+      throw new Error('Failed to create yt-dlp process');
+    }
+
+    attachProcess(jobId, childProcess);
 
     let totalSize = 0;
     let downloadedSize = 0;
+    let lastProgressUpdate = 0;
+    let hasError = false;
+    let isCompleted = false;
 
-    // Track progress
-    process.stdout.on("data", (chunk) => {
+    // Track progress from stdout data (video stream)
+    childProcess.stdout.on("data", (chunk) => {
+      if (hasError || isCompleted) return;
+      
       if (isCancelled(jobId)) {
-        process.kill();
+        console.log(`[YTDLP] Job ${jobId} was cancelled`);
+        hasError = true;
+        try {
+          childProcess.kill();
+        } catch (e) {
+          // Ignore
+        }
         responseStream.destroy();
         return;
       }
 
       downloadedSize += chunk.length;
-      responseStream.write(chunk);
-
-      // Update progress
-      setProgress(jobId, {
-        progress: totalSize > 0 ? (downloadedSize / totalSize) * 100 : 0,
-        downloaded: downloadedSize,
-        total: totalSize,
-        raw: `Streaming: ${(downloadedSize / (1024 * 1024)).toFixed(2)} MB`
-      });
-    });
-
-    process.stderr.on("data", (data) => {
-      const line = data.toString();
       
-      // Try to extract total file size from yt-dlp output
-      const sizeMatch = line.match(/total_bytes["\']?\s*[=:]\s*(\d+)/);
-      if (sizeMatch && !totalSize) {
-        totalSize = parseInt(sizeMatch[1]);
+      try {
+        const written = responseStream.write(chunk);
+        
+        if (!written) {
+          // Backpressure - pause the stream temporarily
+          childProcess.stdout.pause();
+          responseStream.once('drain', () => {
+            childProcess.stdout.resume();
+          });
+        }
+      } catch (err) {
+        console.error(`[YTDLP] Error writing to response for job ${jobId}:`, err.message);
+        hasError = true;
+        try {
+          childProcess.kill();
+        } catch (e) {
+          // Ignore
+        }
+        return;
+      }
+
+      // Update progress every 500ms
+      const now = Date.now();
+      if (now - lastProgressUpdate > 500) {
+        setProgress(jobId, {
+          progress: totalSize > 0 ? Math.min((downloadedSize / totalSize) * 100, 99) : 50,
+          downloaded: downloadedSize,
+          total: totalSize || downloadedSize * 2, // Estimate if unknown
+          raw: `Streaming: ${(downloadedSize / (1024 * 1024)).toFixed(2)} MB`
+        });
+        lastProgressUpdate = now;
       }
     });
 
-    process.on("close", (code) => {
-      if (code === 0) {
-        responseStream.end();
-        setProgress(jobId, { progress: 100, done: true });
-      } else {
-        responseStream.destroy();
-        setProgress(jobId, { error: `Stream failed with code ${code}`, done: true });
+    // Parse stderr for progress and diagnostics
+    childProcess.stderr.on("data", (data) => {
+      const line = data.toString().trim();
+      if (line) {
+        console.log(`[YTDLP-stderr] ${jobId}: ${line.substring(0, 150)}`);
       }
+    });
+
+    childProcess.on("close", (code) => {
+      console.log(`[YTDLP] Process closed for job ${jobId} with code ${code}`);
+      
+      if (!hasError && !isCompleted) {
+        isCompleted = true;
+        
+        if (code === 0 || code === null) {
+          // Success
+          responseStream.end();
+          setProgress(jobId, { 
+            progress: 100, 
+            downloaded: downloadedSize,
+            total: downloadedSize,
+            done: true 
+          });
+          console.log(`[YTDLP] Download completed successfully for job ${jobId}, total: ${(downloadedSize / (1024 * 1024)).toFixed(2)} MB`);
+        } else if (code === 143 || code === 15) {
+          // SIGTERM/SIGKILL - cancelled
+          console.log(`[YTDLP] Download cancelled for job ${jobId}`);
+          responseStream.destroy();
+        } else {
+          // Error
+          console.error(`[YTDLP] Process exited with code ${code} for job ${jobId}`);
+          responseStream.destroy();
+          setProgress(jobId, { error: `Download failed with exit code ${code}`, done: true });
+        }
+      }
+      
       setTimeout(() => clearProgress(jobId), 10000);
     });
 
-    process.on("error", (err) => {
-      responseStream.destroy();
-      setProgress(jobId, { error: err.message, done: true });
+    childProcess.on("error", (err) => {
+      console.error(`[YTDLP] Process error for job ${jobId}:`, err.message);
+      if (!hasError) {
+        hasError = true;
+        responseStream.destroy();
+        setProgress(jobId, { error: err.message, done: true });
+      }
     });
 
-    return { process, videoTitle, fileExt };
+    return { childProcess };
   } catch (err) {
+    console.error(`[YTDLP] Error in streamVideoToBrowser for job ${jobId}:`, err.message);
     setProgress(jobId, { error: err.message, done: true });
     throw err;
   }

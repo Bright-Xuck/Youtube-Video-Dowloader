@@ -8,6 +8,7 @@ router.use(abuseDetectionMiddleware);
 
 // Info and format endpoints (stricter rate limit)
 router.get("/info", infoLimiter, controller.getVideoInfo);
+router.get("/playlist-info", playlistLimiter, controller.getPlaylistInfo);
 router.get("/formats", infoLimiter, controller.getFormats);
 
 // Browser-based streaming download
