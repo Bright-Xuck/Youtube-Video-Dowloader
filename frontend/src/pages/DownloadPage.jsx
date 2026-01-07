@@ -79,7 +79,7 @@ export function DownloadPage() {
         {/* Errors */}
         {(localError || infoError || formatsError || downloadError) && (
           <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded-lg mb-6 flex gap-3">
-            <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
+            <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
             <p>{localError || infoError || formatsError || downloadError}</p>
           </div>
         )}
