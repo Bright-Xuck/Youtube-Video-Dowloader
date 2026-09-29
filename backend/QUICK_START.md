@@ -19,20 +19,31 @@ Server will start on `http://localhost:3000`
 
 ## 🎬 Browser-Based Video Downloads
 
-**Videos download directly to your computer** - not stored on the server!
+**Videos end up on your computer** - the server only uses a small scratch file while a download is being prepared.
+
+### Requirements
+- **yt-dlp** on your PATH (keep it fresh: `yt-dlp -U`) - YouTube breaks regularly
+- **ffmpeg** on your PATH - needed whenever video and audio have to be merged
+- **A JavaScript runtime** for yt-dlp (Node 20+ works, Deno also works). The backend
+  passes `--js-runtimes node` by default, see `YTDLP_JS_RUNTIME` in `.env.example`
 
 ### How It Works
-1. **Frontend** requests video stream from backend
-2. **Backend** uses yt-dlp to fetch video from YouTube
-3. **Video streamed directly to browser** in real-time
-4. **You control the download**: Pause, Resume, Cancel anytime
-5. **Auto-saved** to your Downloads folder (not server storage)
+1. **Frontend** asks the backend to download `GET /api/youtube/stream?url=…&format=…&jobId=…`
+2. **Backend** asks yt-dlp which format that resolves to
+   - one already-muxed stream (e.g. audio only) → **piped straight to the browser**
+   - separate video + audio → **merged by ffmpeg into `downloads/.tmp/<jobId>/`**, then
+     sent with an exact `Content-Length` so the browser can show real progress and
+     support Pause/Resume (HTTP `Range`)
+3. **Browser** saves the finished file to your Downloads folder
+4. The scratch file is removed when the download completes, or automatically after
+   `TEMP_FILE_TTL_MS` (10 minutes by default)
+
+Progress is streamed live from `GET /api/youtube/progress/:jobId` (server sent events).
 
 ### Key Benefits
-✅ No server disk space used  
-✅ Faster downloads (direct to you)  
-✅ Pause/Resume support  
-✅ Better privacy (videos on your machine)  
+✅ No long-term server disk usage (scratch files expire)  
+✅ Accurate progress + Pause/Resume via byte ranges  
+✅ Clear error messages instead of a dead connection  
 ✅ No cleanup needed
 
 ### New Streaming Endpoint
@@ -138,6 +149,10 @@ PORT=3001 npm run dev
 ```bash
 # Make sure yt-dlp is installed
 yt-dlp --version
+
+# If yt-dlp is installed in a custom location, set the path before starting the backend
+set YTDLP_BINARY=C:\path\to\yt-dlp.exe
+npm run dev
 
 # Check disk space
 curl http://localhost:3000/api/youtube/disk-stats

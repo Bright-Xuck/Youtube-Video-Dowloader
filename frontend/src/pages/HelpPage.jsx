@@ -58,6 +58,22 @@ const TROUBLESHOOTING_ITEMS = [
     solution: 'This can happen when YouTube updates its protection mechanisms. Wait a few hours for yt-dlp to update automatically, or restart the backend server.'
   },
   {
+    issue: 'Download fails with "YouTube refused the media request (HTTP 403)" or "That quality is not available"',
+    solution: 'YouTube changed something again. Update yt-dlp with `yt-dlp -U` in the backend folder, then restart the backend. If it keeps happening, pick a different quality - a lower resolution often works.'
+  },
+  {
+    issue: 'yt-dlp warns "No supported JavaScript runtime could be found"',
+    solution: 'yt-dlp needs a JavaScript runtime to solve YouTube\'s player challenges. Install Deno, or keep Node 20+ installed (the backend passes `--js-runtimes node` by default; see YTDLP_JS_RUNTIME in backend/.env.example).'
+  },
+  {
+    issue: 'Download fails while merging (ffmpeg error)',
+    solution: 'ffmpeg must be installed and on your PATH. Test it with `ffmpeg -version`. Without ffmpeg only single-stream formats (audio only) can be downloaded.'
+  },
+  {
+    issue: '"Lost the connection to the backend"',
+    solution: 'The backend was not reachable while the file was being sent. Make sure it is running with `npm run dev` in the backend folder and that nothing else is using port 3000. Restarting the download usually fixes it.'
+  },
+  {
     issue: 'Download progress not updating',
     solution: 'Refresh the page and check the "Active Downloads" section. The server continues downloading in the background even if the page is not updated.'
   },

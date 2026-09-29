@@ -15,6 +15,7 @@ exports.createCancellationToken = (jobId, url) => {
     cancelled: false,
     process: null,
     playlistDir: null,
+    tempDir: null,
     createdAt: Date.now()
   };
 
@@ -57,6 +58,12 @@ exports.cancelDownload = async (jobId) => {
       await fs.remove(token.playlistDir);
     }
 
+    // Clean up the scratch directory used for merge downloads
+    if (token.tempDir) {
+      const fs = require("fs-extra");
+      await fs.remove(token.tempDir);
+    }
+
     // Schedule cleanup of the token after 5 seconds
     setTimeout(() => {
       activeDownloads.delete(jobId);
@@ -79,12 +86,15 @@ exports.isCancelled = (jobId) => {
 /**
  * Attach process to cancellation token
  */
-exports.attachProcess = (jobId, process, playlistDir = null) => {
+exports.attachProcess = (jobId, process, playlistDir = null, tempDir = null) => {
   const token = activeDownloads.get(jobId);
   if (token) {
     token.process = process;
     if (playlistDir) {
       token.playlistDir = playlistDir;
+    }
+    if (tempDir) {
+      token.tempDir = tempDir;
     }
   }
 };
@@ -117,4 +127,11 @@ exports.cleanupOldTokens = () => {
       activeDownloads.delete(jobId);
     }
   }
+};
+
+/**
+ * Forget a finished job: its process is gone and its file lives on disk.
+ */
+exports.removeToken = (jobId) => {
+  return activeDownloads.delete(jobId);
 };

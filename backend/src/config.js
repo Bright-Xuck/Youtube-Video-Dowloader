@@ -1,3 +1,8 @@
+const path = require("path");
+
+const BACKEND_ROOT = path.join(__dirname, "..");
+const DOWNLOAD_DIR = path.join(BACKEND_ROOT, "downloads");
+
 /**
  * Configuration file for backend settings
  */
@@ -33,21 +38,38 @@ module.exports = {
   },
 
   // Download configuration
-  downloadDir: '../downloads',
+  downloadDir: DOWNLOAD_DIR,
+  // Scratch space for downloads that must be merged by ffmpeg before they can
+  // be streamed. Files are removed as soon as they are handed to the browser.
+  tmpDir: path.join(DOWNLOAD_DIR, '.tmp'),
+  fragmentDir: path.join(DOWNLOAD_DIR, '.tmp', 'fragments'),
   outputTemplate: {
     single: '%(title)s.%(ext)s',
     playlist: '%(playlist)s/%(title)s.%(ext)s'
   },
   mergeFormat: 'mp4',
-  defaultFormat: 'bv*+ba/b', // best video + best audio / best overall
+  // "bv*+ba" = best video + best audio. A bare "b" MUST NOT be used: it selects
+  // YouTube's progressive formats (18/22), which now answer with HTTP 403.
+  defaultFormat: 'bv*+ba',
+  // Prefer H.264 video + AAC audio so the merged result is a normal, widely
+  // playable MP4 (VP9/AV1 + Opus in MP4 is not universally supported).
+  sortOrder: process.env.YTDLP_SORT || 'vcodec:h264,res,aext:m4a',
+  // yt-dlp needs a JS runtime to solve YouTube's player challenges.
+  // Use "deno" if you install it, "node" works with Node 20+.
+  jsRuntime: process.env.YTDLP_JS_RUNTIME || 'node',
+  // How long we wait for the first byte of a direct stream before giving up.
+  streamStartupTimeoutMs: Number(process.env.STREAM_STARTUP_TIMEOUT_MS) || 60000,
+  // A finished merge is kept this long so a paused download can be resumed
+  // with an HTTP Range request.
+  tempFileTtlMs: Number(process.env.TEMP_FILE_TTL_MS) || 10 * 60 * 1000,
 
   // Video format presets
   formatPresets: [
-    { id: 'best', label: 'Best Quality (best video + best audio)', format: 'bv*+ba/b' },
-    { id: '720p', label: '720p HD', format: 'bestvideo[height<=720]+bestaudio/best[height<=720]' },
-    { id: '480p', label: '480p', format: 'bestvideo[height<=480]+bestaudio/best[height<=480]' },
-    { id: '360p', label: '360p (Low bandwidth)', format: 'bestvideo[height<=360]+bestaudio/best[height<=360]' },
-    { id: 'audio', label: 'Audio Only (MP3)', format: 'bestaudio' }
+    { id: 'best', label: 'Best Quality (best video + best audio)', format: 'bv*+ba' },
+    { id: '720p', label: '720p HD', format: 'bv*[height<=720]+ba' },
+    { id: '480p', label: '480p', format: 'bv*[height<=480]+ba' },
+    { id: '360p', label: '360p (Low bandwidth)', format: 'bv*[height<=360]+ba' },
+    { id: 'audio', label: 'Audio Only', format: 'ba' }
   ],
 
   // Logging

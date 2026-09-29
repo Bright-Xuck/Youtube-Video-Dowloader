@@ -53,7 +53,7 @@ export function PlaylistPage() {
     try {
       // Download playlist videos as individual files
       // (Browser will handle them based on browser's download settings)
-      await startDownload(url, 'bv*+ba/b');
+      await startDownload(url, 'bv*+ba');
     } catch (err) {
       setLocalError(err.message || 'Failed to download playlist');
     }
@@ -128,7 +128,7 @@ export function PlaylistPage() {
             </div>
 
             {/* Download Button */}
-            {!downloading && (
+            {!downloading && !paused && (
               <button
                 onClick={handleDownloadPlaylist}
                 className="w-full mt-6 bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-bold text-lg transition-colors flex items-center justify-center gap-2"
@@ -141,7 +141,7 @@ export function PlaylistPage() {
         )}
 
         {/* Download Progress Display */}
-        {downloading && (
+        {(downloading || paused) && (
           <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold text-blue-900">
@@ -217,15 +217,13 @@ export function PlaylistPage() {
         )}
 
         {/* Info Box */}
-        {!downloading && (
+        {!downloading && !paused && (
           <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-6 mt-8">
             <h3 className="font-bold text-yellow-900 mb-3">How it works</h3>
             <ol className="list-decimal list-inside space-y-2 text-yellow-800 text-sm">
               <li>Paste a YouTube playlist URL above</li>
               <li>Click "Fetch Info" to see playlist details</li>
-              <li>Click "Download Playlist" to start downloading</li>
-              <li>All videos will download with pause/resume support</li>
-              <li>Videos are saved to your Downloads folder as they download</li>
+              <li>Downloading a whole playlist is not supported by the stream endpoint yet - open a single video instead</li>
             </ol>
           </div>
         )}

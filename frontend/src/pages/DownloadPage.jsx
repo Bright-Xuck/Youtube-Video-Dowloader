@@ -1,15 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Download, AlertCircle, Play, Loader, Pause, Play as PlayIcon } from 'lucide-react';
-import { api } from '../services/api';
 import { useVideoInfo, useFormats, useBrowserDownload } from '../hooks/useApi';
 
 export function DownloadPage() {
   const [url, setUrl] = useState('');
-  const [selectedFormat, setSelectedFormat] = useState('best');
+  const [selectedFormat, setSelectedFormat] = useState('bv*+ba');
   const [localError, setLocalError] = useState(null);
 
   const { info, loading: infoLoading, error: infoError, fetch: fetchInfo } = useVideoInfo();
-  const { formats, loading: formatsLoading, error: formatsError, fetch: fetchFormats } = useFormats();
+  const { formats, error: formatsError, fetch: fetchFormats } = useFormats();
   const { 
     progress, 
     downloading, 
@@ -114,7 +113,7 @@ export function DownloadPage() {
         )}
 
         {/* Quality Selection */}
-        {formats && !downloading && (
+        {formats && !downloading && !paused && (
           <div className="mb-8">
             <label className="block text-sm font-semibold mb-4">Select Quality</label>
             
@@ -164,7 +163,7 @@ export function DownloadPage() {
         )}
 
         {/* Download Button */}
-        {info && formats && !downloading && (
+        {info && formats && !downloading && !paused && (
           <button
             onClick={handleDownload}
             className="w-full bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-bold text-lg transition-colors flex items-center justify-center gap-2"
@@ -175,7 +174,7 @@ export function DownloadPage() {
         )}
 
         {/* Download Progress Display */}
-        {downloading && (
+        {(downloading || paused) && (
           <div className="bg-blue-50 border-2 border-blue-200 rounded-lg p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold text-blue-900">
@@ -239,7 +238,7 @@ export function DownloadPage() {
                 <button
                   onClick={() => {
                     setUrl('');
-                    setSelectedFormat('best');
+                    setSelectedFormat('bv*+ba');
                   }}
                   className="mt-3 w-full bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
                 >

@@ -2,6 +2,7 @@ const fs = require("fs-extra");
 const path = require("path");
 
 const DOWNLOAD_DIR = path.join(__dirname, "../../downloads");
+const TMP_DIR_NAME = ".tmp";
 const MAX_DISK_SPACE_MB = process.env.MAX_DISK_SPACE_MB || 5000; // 5GB default
 
 /**
@@ -60,9 +61,12 @@ exports.cleanupOldFiles = async (targetFreeMB = 500) => {
   try {
     await fs.ensureDir(DOWNLOAD_DIR);
     const files = await fs.readdir(DOWNLOAD_DIR, { withFileTypes: true });
-    
+
+    // Never touch in-flight downloads / yt-dlp scratch files
+    const cleanupable = files.filter((f) => f.name !== TMP_DIR_NAME);
+
     const fileStats = await Promise.all(
-      files.map(async (file) => {
+      cleanupable.map(async (file) => {
         const filePath = path.join(DOWNLOAD_DIR, file.name);
         const stat = await fs.stat(filePath);
         return {

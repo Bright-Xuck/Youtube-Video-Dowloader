@@ -1,5 +1,57 @@
-import { useState, useCallback, useEffect } from 'react';
-import { api } from '../services/api';
+import { useState, useCallback, useEffect, useRef } from 'react';
+import { api, createJobId } from '../services/api';
+
+/** Turn a browser fetch failure into something a user can act on. */
+const friendlyError = (err) => {
+  if (!err) return 'Download failed';
+  if (err.name === 'AbortError') return 'Download stopped';
+  if (err instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(err.message || '')) {
+    return 'Lost the connection to the backend. Make sure it is running on port 3000, then try again.';
+  }
+  return err.message || 'Download failed';
+};
+
+/** "bytes 1000-2000/3000" -> 3000 */
+const totalFromContentRange = (header) => {
+  const match = /\/(\d+)\s*$/.exec(header || '');
+  return match ? Number(match[1]) : 0;
+};
+
+/** Prefer the RFC 5986 filename so titles with emoji/accents survive. */
+const filenameFrom = (contentDisposition) => {
+  if (!contentDisposition) return null;
+
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(contentDisposition);
+  if (utf8) {
+    try {
+      return decodeURIComponent(utf8[1]);
+    } catch {
+      // fall through to the plain filename
+    }
+  }
+
+  const plain = /filename="?([^";]+)"?/i.exec(contentDisposition);
+  return plain ? plain[1] : null;
+};
+
+/** Open the progress stream of a job; returns a close() handle. */
+const openProgressStream = (jobId, onUpdate) => {
+  if (!jobId || typeof EventSource === 'undefined') return null;
+
+  const source = new EventSource(api.progressUrl(jobId));
+  source.onmessage = (event) => {
+    try {
+      onUpdate(JSON.parse(event.data));
+    } catch {
+      // ignore a malformed frame
+    }
+  };
+  // The endpoint stays open on purpose; failures are reported by the download
+  // request itself, so do not turn this into an error.
+  source.onerror = () => source.close();
+
+  return source;
+};
 
 export const useProgressStream = (jobId) => {
   const [progress, setProgress] = useState(0);
@@ -8,36 +60,21 @@ export const useProgressStream = (jobId) => {
   const [raw, setRaw] = useState('');
 
   useEffect(() => {
-    if (!jobId) return;
+    if (!jobId) return undefined;
 
-    const eventSource = new EventSource(`http://localhost:3000/api/youtube/progress/${jobId}`);
+    const source = openProgressStream(jobId, (data) => {
+      setProgress(data.progress || 0);
+      setRaw(data.raw || '');
 
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        setProgress(data.progress || 0);
-        setRaw(data.raw || '');
-        
-        if (data.error) {
-          setError(data.error);
-          setDone(true);
-          eventSource.close();
-        } else if (data.done) {
-          setDone(true);
-          eventSource.close();
-        }
-      } catch (err) {
-        setError('Failed to parse progress data');
-        eventSource.close();
+      if (data.error) {
+        setError(data.error);
+        setDone(true);
+      } else if (data.done) {
+        setDone(true);
       }
-    };
+    });
 
-    eventSource.onerror = () => {
-      setError('Connection lost');
-      eventSource.close();
-    };
-
-    return () => eventSource.close();
+    return () => source?.close();
   }, [jobId]);
 
   return { progress, done, error, raw };
@@ -55,7 +92,7 @@ export const useVideoInfo = () => {
       const response = await api.getVideoInfo(url);
       setInfo(response.data);
     } catch (err) {
-      setError(err.response?.data?.details || err.message);
+      setError(err.response?.data?.details || err.response?.data?.error || err.message);
     } finally {
       setLoading(false);
     }
@@ -76,7 +113,7 @@ export const useFormats = () => {
       const response = await api.getFormats(url);
       setFormats(response.data);
     } catch (err) {
-      setError(err.response?.data?.error || err.message);
+      setError(err.response?.data?.details || err.response?.data?.error || err.message);
     } finally {
       setLoading(false);
     }
@@ -169,8 +206,14 @@ export const useActiveDownloads = () => {
 
   return { downloads, loading, error, refetch };
 };
+
 /**
- * Hook for browser-based video downloads with pause/resume support
+ * Hook for downloading a video into the browser, with real pause/resume.
+ *
+ * The backend answers with the finished file (exact Content-Length), so the
+ * browser can count bytes reliably. A pause aborts the request but keeps the
+ * bytes that already arrived; resuming asks the backend for the rest with a
+ * Range header, which it can serve as long as its scratch file is around.
  */
 export const useBrowserDownload = () => {
   const [progress, setProgress] = useState(0);
@@ -179,138 +222,179 @@ export const useBrowserDownload = () => {
   const [error, setError] = useState(null);
   const [downloadedSize, setDownloadedSize] = useState(0);
   const [totalSize, setTotalSize] = useState(0);
-  const [controller, setController] = useState(null);
-  const [isDownloading, setIsDownloading] = useState(false);
 
-  const startDownload = useCallback(async (url, format) => {
+  const abortRef = useRef(null);
+  const activeRef = useRef(false);
+  const requestRef = useRef(null); // { url, format, jobId }
+  const chunksRef = useRef([]); // partial data, kept across a pause
+  const receivedRef = useRef(0);
+
+  const saveBlob = useCallback((chunks, type, filename) => {
+    const blob = new Blob(chunks, { type: type || 'video/mp4' });
+    const objectUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(objectUrl);
+  }, []);
+
+  const startDownload = useCallback(async (url, format, { resume = false, jobId } = {}) => {
     setError(null);
-    setDownloading(true);
-    setIsDownloading(true);
     setPaused(false);
-    setProgress(0);
-    setDownloadedSize(0);
-    setTotalSize(0);
+    setDownloading(true);
+    activeRef.current = true;
+
+    if (!resume) {
+      chunksRef.current = [];
+      receivedRef.current = 0;
+      setProgress(0);
+      setDownloadedSize(0);
+      setTotalSize(0);
+    }
+
+    const currentJobId = jobId || requestRef.current?.jobId || createJobId();
+    requestRef.current = { url, format, jobId: currentJobId };
+
+    // The backend downloads and merges first, then sends the file, so the
+    // interesting progress happens before any body bytes arrive.
+    const progressSource = openProgressStream(currentJobId, (data) => {
+      if (typeof data.total === 'number' && data.total > 0) {
+        setTotalSize((previous) => (previous > 0 ? previous : data.total));
+      }
+      if (typeof data.downloaded === 'number' && typeof data.progress === 'number') {
+        setDownloadedSize((previous) => Math.max(previous, data.downloaded));
+        setProgress(Math.min(99, Math.round(data.progress)));
+      }
+      if (data.error) setError(data.error);
+    });
 
     try {
       const abortController = new AbortController();
-      setController(abortController);
+      abortRef.current = abortController;
 
-      const response = await fetch(
-        `http://localhost:3000/api/youtube/stream?url=${encodeURIComponent(url)}&format=${encodeURIComponent(format)}`,
-        { signal: abortController.signal }
-      );
+      const headers = {};
+      if (resume && receivedRef.current > 0) {
+        headers.Range = `bytes=${receivedRef.current}-`;
+      }
+
+      const response = await fetch(api.streamVideo(url, format, currentJobId), {
+        signal: abortController.signal,
+        headers
+      });
+
 
       if (!response.ok) {
-        let errorMessage = `HTTP ${response.status}`;
+        let message = `HTTP ${response.status}`;
         try {
-          const errorData = await response.json();
-          errorMessage = errorData.error || errorMessage;
-        } catch (e) {
-          // If response is not JSON, use the status message
+          const payload = await response.json();
+          message = payload.details || payload.error || message;
+        } catch {
+          // not JSON (e.g. the stream was cut): keep the status message
         }
-        throw new Error(errorMessage);
+        throw new Error(message);
       }
 
-      // Get total file size from Content-Length header if available
-      const contentLength = response.headers.get('content-length');
-      if (contentLength) {
-        setTotalSize(parseInt(contentLength, 10));
+      // A plain 200 means the backend restarted the file from scratch (scratch
+      // file gone): whatever we kept is useless.
+      if (resume && response.status === 200) {
+        chunksRef.current = [];
+        receivedRef.current = 0;
+        setDownloadedSize(0);
       }
 
-      // Get filename from Content-Disposition header
-      const contentDisposition = response.headers.get('content-disposition');
-      let filename = 'download.mp4';
-      if (contentDisposition) {
-        const filenameMatch = contentDisposition.match(/filename="(.+?)"/);
-        if (filenameMatch) {
-          filename = filenameMatch[1];
-        }
-      }
+      const total =
+        totalFromContentRange(response.headers.get('content-range')) ||
+        Number(response.headers.get('content-length')) ||
+        0;
+      if (total > 0) setTotalSize(total);
 
-      // Read the response body as a stream
+      const filename = filenameFrom(response.headers.get('content-disposition')) || 'download.mp4';
       const reader = response.body.getReader();
-      const chunks = [];
-      let receivedLength = 0;
 
-      while (isDownloading) {
-        try {
-          const { done, value } = await reader.read();
+      while (activeRef.current) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-          if (done) break;
+        chunksRef.current.push(value);
+        receivedRef.current += value.length;
+        setDownloadedSize(receivedRef.current);
 
-          chunks.push(value);
-          receivedLength += value.length;
-
-          // Update progress
-          if (contentLength) {
-            const progressPercent = (receivedLength / parseInt(contentLength, 10)) * 100;
-            setProgress(Math.round(progressPercent));
-          }
-          setDownloadedSize(receivedLength);
-        } catch (err) {
-          if (err.name === 'AbortError') {
-            setError('Download cancelled');
-          } else {
-            throw err;
-          }
-          break;
+        if (total > 0) {
+          setProgress(Math.min(99, Math.round((receivedRef.current / total) * 100)));
         }
       }
 
-      if (!isDownloading) {
-        // Download was cancelled
-        reader.cancel();
-        setDownloading(false);
-        setIsDownloading(false);
+      if (!activeRef.current) {
+        // Paused or cancelled: keep whatever arrived so resume can continue.
+        try {
+          await reader.cancel();
+        } catch {
+          // already closed
+        }
         return;
       }
 
-      // Create blob and download
-      const blob = new Blob(chunks, { type: 'video/mp4' });
-      const downloadUrl = window.URL.createObjectURL(blob);
-      const downloadLink = document.createElement('a');
-      downloadLink.href = downloadUrl;
-      downloadLink.download = filename;
-      document.body.appendChild(downloadLink);
-      downloadLink.click();
-      document.body.removeChild(downloadLink);
-      window.URL.revokeObjectURL(downloadUrl);
+      // TODO: the file is buffered in memory before it is saved, which is a
+      // lot for big videos. The proper fix is the File System Access API (or
+      // handing the URL to the browser's own download manager).
+      saveBlob(chunksRef.current, response.headers.get('content-type'), filename);
 
       setProgress(100);
-      setDownloading(false);
-      setIsDownloading(false);
+      chunksRef.current = [];
+      receivedRef.current = 0;
+      requestRef.current = null;
     } catch (err) {
-      console.error('Download error:', err);
-      setError(err.message || 'Download failed');
+      if (activeRef.current) {
+        setError(friendlyError(err));
+      }
+    } finally {
+      progressSource?.close();
+      activeRef.current = false;
+      abortRef.current = null;
       setDownloading(false);
-      setIsDownloading(false);
     }
-  }, [isDownloading]);
+  }, [saveBlob]);
+
 
   const pauseDownload = useCallback(() => {
+    if (!activeRef.current) return;
+    activeRef.current = false;
+    abortRef.current?.abort();
     setPaused(true);
-    if (controller) {
-      controller.abort();
-    }
-  }, [controller]);
-
-  const resumeDownload = useCallback(() => {
-    // Resume is not directly supported with AbortController
-    // The user will need to restart the download
-    setPaused(false);
+    setError('Paused. The data received so far is kept, so resuming continues from there.');
   }, []);
 
+  const resumeDownload = useCallback(() => {
+    const request = requestRef.current;
+    if (!request) {
+      setError('There is no paused download to resume.');
+      return;
+    }
+    startDownload(request.url, request.format, {
+      resume: true,
+      jobId: request.jobId
+    });
+  }, [startDownload]);
+
   const cancelDownload = useCallback(() => {
-    setIsDownloading(false);
-    setDownloading(false);
+    const jobId = requestRef.current?.jobId;
+
+    activeRef.current = false;
+    abortRef.current?.abort();
+    chunksRef.current = [];
+    receivedRef.current = 0;
+    requestRef.current = null;
+
     setPaused(false);
     setProgress(0);
     setDownloadedSize(0);
-    if (controller) {
-      controller.abort();
-    }
-    setError('Download cancelled by user');
-  }, [controller]);
+    setError('Download cancelled.');
+
+    if (jobId) api.cancelDownload(jobId).catch(() => {});
+  }, []);
 
   return {
     progress,
@@ -325,3 +409,4 @@ export const useBrowserDownload = () => {
     cancelDownload
   };
 };
+
