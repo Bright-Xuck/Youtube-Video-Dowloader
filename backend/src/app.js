@@ -7,7 +7,15 @@ const { startCleanupScheduler } = require("./utils/cleanupScheduler");
 const app = express();
 
 // Middleware
-app.use(cors());
+// The browser only lets JavaScript read a small set of response headers
+// (Content-Type, Content-Length, ...). Content-Disposition carries the real
+// filename, so it has to be exposed explicitly or the frontend cannot name the
+// saved file and falls back to "download.mp4".
+app.use(
+  cors({
+    exposedHeaders: ["Content-Disposition", "Content-Range", "Accept-Ranges"]
+  })
+);
 app.use(express.json());
 
 // Apply general rate limiting

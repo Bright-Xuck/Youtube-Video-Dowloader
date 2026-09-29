@@ -34,6 +34,21 @@ const filenameFrom = (contentDisposition) => {
   return plain ? plain[1] : null;
 };
 
+/** Strip characters a file system will not accept, and any extension. */
+const toDownloadName = (title, ext = 'mp4') => {
+  const cleaned = String(title || '')
+    .replace(/[<>:"/\\|?*]/g, '_')
+    .split('')
+    .filter((char) => char.charCodeAt(0) > 31) // drop control characters
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .substring(0, 150)
+    .replace(/[. ]+$/, '')
+    .replace(/\.[A-Za-z0-9]{1,5}$/, '');
+  return `${cleaned || 'video'}.${ext}`;
+};
+
 /** Open the progress stream of a job; returns a close() handle. */
 const openProgressStream = (jobId, onUpdate) => {
   if (!jobId || typeof EventSource === 'undefined') return null;
@@ -241,7 +256,7 @@ export const useBrowserDownload = () => {
     window.URL.revokeObjectURL(objectUrl);
   }, []);
 
-  const startDownload = useCallback(async (url, format, { resume = false, jobId } = {}) => {
+  const startDownload = useCallback(async (url, format, { resume = false, jobId, title } = {}) => {
     setError(null);
     setPaused(false);
     setDownloading(true);
@@ -311,7 +326,13 @@ export const useBrowserDownload = () => {
         0;
       if (total > 0) setTotalSize(total);
 
-      const filename = filenameFrom(response.headers.get('content-disposition')) || 'download.mp4';
+      const contentType = response.headers.get('content-type') || '';
+      // The backend names the file in Content-Disposition. `title` is only a
+      // fallback for when that header is not readable from JS.
+      const extension = (contentType.split('/')[1] || 'mp4').split(';')[0].trim();
+      const filename =
+        filenameFrom(response.headers.get('content-disposition')) ||
+        toDownloadName(title, extension);
       const reader = response.body.getReader();
 
       while (activeRef.current) {

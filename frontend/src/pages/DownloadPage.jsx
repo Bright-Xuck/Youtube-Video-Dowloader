@@ -39,7 +39,7 @@ export function DownloadPage() {
     setLocalError(null);
     
     try {
-      await startDownload(url, selectedFormat);
+      await startDownload(url, selectedFormat, { title: info?.title });
     } catch (err) {
       setLocalError(err.message || 'Failed to start download');
     }
